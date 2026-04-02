@@ -325,7 +325,7 @@ function ExerciseTimer({ timerSec, timerState, onTap, canInput }) {
 // timerMapがApp stateで1秒ごとに更新されても再マウントされない
 // ============================================================
 
-function DayScreenInner({ selectedDate, dynSched, logs, menus, fromToday, updateDb, setScreen, STORAGE_KEY }) {
+function DayScreenInner({ selectedDate, dynSched, logs, menus, fromToday, setDb, updateDb, setScreen, STORAGE_KEY }) {
   const entry = dynSched[selectedDate];
   const log = logs[selectedDate] || {};
   const canInput = fromToday;
@@ -341,7 +341,20 @@ function DayScreenInner({ selectedDate, dynSched, logs, menus, fromToday, update
   };
 
   const localRef = useRef(null);
-  if (localRef.current === null) localRef.current = defaultExercises();
+  if (localRef.current === null) {
+    // localStorageから最新データを優先して読み込む
+    try {
+      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+      const storedLog = stored.logs?.[selectedDate];
+      if (storedLog?.exercises) {
+        localRef.current = storedLog.exercises;
+      } else {
+        localRef.current = defaultExercises();
+      }
+    } catch {
+      localRef.current = defaultExercises();
+    }
+  }
   const openIdxRef = useRef(null);
   const [, forceUpdate] = useState(0);
   const [note, setNote] = useState(log.note || "");
@@ -397,22 +410,27 @@ function DayScreenInner({ selectedDate, dynSched, logs, menus, fromToday, update
     forceUpdate(n => n + 1);
   };
 
-  const addExtraSet = (exIdx) => {
-    localRef.current = localRef.current.map((ex, i) => i !== exIdx ? ex : {
-      ...ex, sets: [...(ex.sets || []), { kg: "", reps: "", memo: "" }]
-    });
-    forceUpdate(n => n + 1);
+  const saveToLocalStorage = () => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+      stored.logs = { ...(stored.logs || {}), [selectedDate]: { exercises: localRef.current, note, savedAt: new Date().toISOString() } };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+    } catch { }
   };
 
   const updateSet = (exIdx, setIdx, field, val) => {
     localRef.current = localRef.current.map((ex, i) => i !== exIdx ? ex : {
       ...ex, sets: ex.sets.map((s, j) => j !== setIdx ? s : { ...s, [field]: val })
     });
-    try {
-      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
-      stored.logs = { ...(stored.logs || {}), [selectedDate]: { exercises: localRef.current, note, savedAt: new Date().toISOString() } };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
-    } catch { }
+    saveToLocalStorage();
+    forceUpdate(n => n + 1);
+  };
+
+  const addExtraSet = (exIdx) => {
+    localRef.current = localRef.current.map((ex, i) => i !== exIdx ? ex : {
+      ...ex, sets: [...(ex.sets || []), { kg: "", reps: "", memo: "" }]
+    });
+    saveToLocalStorage();
     forceUpdate(n => n + 1);
   };
 
@@ -426,7 +444,10 @@ function DayScreenInner({ selectedDate, dynSched, logs, menus, fromToday, update
     <div style={{ paddingBottom: 100 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "20px 20px 12px" }}>
         <button onClick={() => {
-          updateDb({ logs: { ...logs, [selectedDate]: { exercises: localRef.current, note, savedAt: new Date().toISOString() } } });
+          setDb(prev => ({
+            ...prev,
+            logs: { ...prev.logs, [selectedDate]: { exercises: localRef.current, note, savedAt: new Date().toISOString() } }
+          }));
           setScreen("calendar");
         }} style={btnGhost}>←</button>
         <div>
@@ -556,7 +577,7 @@ function DayScreenInner({ selectedDate, dynSched, logs, menus, fromToday, update
       {canInput && (
         <div style={{ padding: "0 16px 14px" }}>
           {allCompleted ? (
-            <button onClick={() => updateDb({ logs: { ...logs, [selectedDate]: { exercises: localRef.current, note, savedAt: new Date().toISOString() } } })}
+            <button onClick={() => setDb(prev => ({ ...prev, logs: { ...prev.logs, [selectedDate]: { exercises: localRef.current, note, savedAt: new Date().toISOString() } } }))}
               style={{ width: "100%", border: "none", borderRadius: 14, padding: "18px 20px", cursor: "pointer", background: "linear-gradient(135deg, #14532d, #166534)", boxShadow: "0 4px 24px #22c55e33", display: "flex", alignItems: "center", justifyContent: "space-between", transition: "transform 0.1s, box-shadow 0.1s" }}
               onPointerDown={e => { e.currentTarget.style.transform = "scale(0.97)"; e.currentTarget.style.boxShadow = "0 1px 8px #22c55e22"; }}
               onPointerUp={e => { e.currentTarget.style.transform = "scale(1)"; e.currentTarget.style.boxShadow = "0 4px 24px #22c55e33"; }}
@@ -912,20 +933,8 @@ export default function App() {
   };
 
   // ============================================================
-  // SCREEN: DAY DETAIL → props経由でApp stateを受け取る
+  // SCREEN: DAY DETAIL → DayScreenInnerを直接レンダリング
   // ============================================================
-  const DayScreen = () => (
-    <DayScreenInner
-      selectedDate={selectedDate}
-      dynSched={dynSched}
-      logs={logs}
-      menus={menus}
-      fromToday={fromToday}
-      updateDb={updateDb}
-      setScreen={setScreen}
-      STORAGE_KEY={STORAGE_KEY}
-    />
-  );
 
   // ============================================================
   // SCREEN: MENUS
@@ -1398,7 +1407,17 @@ export default function App() {
       {/* screens */}
       {screen === "today" && <TodayScreen />}
       {screen === "calendar" && <CalendarScreen />}
-      {screen === "day" && <DayScreen />}
+      {screen === "day" && <DayScreenInner
+        selectedDate={selectedDate}
+        dynSched={dynSched}
+        logs={logs}
+        menus={menus}
+        fromToday={fromToday}
+        setDb={setDb}
+        updateDb={updateDb}
+        setScreen={setScreen}
+        STORAGE_KEY={STORAGE_KEY}
+      />}
       {screen === "menus" && <MenusScreen />}
       {screen === "cycle" && <CycleConfigScreen />}
       {screen === "stats" && <StatsScreen />}
